@@ -39,3 +39,5 @@ def check(url: str) -> dict:
     stub_score = random.randint(0, 100)
     return {"score": stub_score, "source": "VirusTotal"}
     # ─────────────────────────────────────────────────────────────────────────
+
+# virustotal 
