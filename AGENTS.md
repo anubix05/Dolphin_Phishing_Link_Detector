@@ -107,6 +107,12 @@ To integrate a new phishing detection API:
 4. Follow the standard return format
 5. Import and call it in `main.py`
 
+Use the format:
+- from config import VIRUSTOTAL_API_KEY, for VirusTotal
+- from config import GOOGLE_SAFE_BROWSING_API_KEY, for Google Safe Browsing
+- from config import URLSCAN_API_KEY, for URLScan
+to import the API keys
+
 Do NOT modify existing API modules unnecessarily.
 
 ---
