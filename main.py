@@ -20,6 +20,7 @@ from twilio.twiml.messaging_response import MessagingResponse  # type: ignore[im
 from apis.virustotal           import check as vt_check
 from apis.urlscan              import check as us_check
 from apis.google_safe_browsing import check as gsb_check
+from apis.heuristics           import check as heuristics_check
 
 # ── Internal modules ───────────────────────────────────────────────────────────
 from scoring import build_report
@@ -44,10 +45,21 @@ def extract_url(text: str) -> str | None:
 
 def run_all_checks(url: str) -> list[dict]:
     """
-    Run every API check concurrently and return the list of results.
+    Run heuristic analysis first (instant, local), then fire the
+    external API checks concurrently.  Returns the combined list of results.
     Failed checks are excluded (logged to stderr).
     """
-    results = []
+    results: list[dict] = []
+
+    # ── Step 1: Heuristic analysis (runs locally, no network) ────────────────
+    try:
+        heuristic_result = heuristics_check(url)
+        if heuristic_result is not None:
+            results.append(heuristic_result)
+    except Exception as exc:
+        print(f"[ERROR] heuristics raised an exception: {exc}")
+
+    # ── Step 2: External API checks (concurrent) ────────────────────────────
     with concurrent.futures.ThreadPoolExecutor() as executor:
         futures = {executor.submit(fn, url): fn.__module__ for fn in API_CHECKS}
         for future in concurrent.futures.as_completed(futures):
@@ -58,6 +70,7 @@ def run_all_checks(url: str) -> list[dict]:
                     results.append(result)
             except Exception as exc:
                 print(f"[ERROR] {module_name} raised an exception: {exc}")
+
     return results
 
 

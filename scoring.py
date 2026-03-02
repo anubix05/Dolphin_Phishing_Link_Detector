@@ -40,7 +40,7 @@ def classify(score: float) -> str:
 
 def build_report(url: str, results: list[dict]) -> str:
     """
-    Build the WhatsApp reply message from the list of API results.
+    Build the reply message from the list of API results.
 
     Parameters
     ----------
@@ -61,15 +61,34 @@ def build_report(url: str, results: list[dict]) -> str:
     else:
         label = "UNSAFE ❌"
 
+    # ── Per-source score breakdown ────────────────────────────────────────────
     sources = "\n".join(
-        f"  - {r['source']}" for r in results if r is not None
+        f"  - {r['source']}: {r['score']}%" for r in results if r is not None
     )
+
+    # ── Heuristic flags section (only when flags were raised) ─────────────────
+    heuristic_section = ""
+    heuristic_result = next(
+        (r for r in results if r is not None and r.get("source") == "Heuristics"),
+        None,
+    )
+    if heuristic_result:
+        flags = heuristic_result.get("flags", [])
+        if flags:
+            flag_lines = "\n".join(
+                f"  ⚑ {f['name']}: {f['description']}"
+                for f in flags
+            )
+            heuristic_section = f"\n\n*🧠 Heuristic Red Flags ({len(flags)} detected):*\n{flag_lines}"
+        else:
+            heuristic_section = "\n\n*🧠 Heuristics:* No structural red flags detected ✅"
 
     report = (
         f"🔍 *Safety Report*\n\n"
         f"*URL:* {url}\n\n"
         f"*Final Safety Score:* {final_score}%\n\n"
         f"*Classification:* {label}\n\n"
-        f"*Checked using:*\n{sources}"
+        f"*Score by source:*\n{sources}"
+        f"{heuristic_section}"
     )
     return report
