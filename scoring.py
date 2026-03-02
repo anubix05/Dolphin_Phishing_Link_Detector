@@ -1,9 +1,13 @@
-from config import SCORE_UNSAFE_MAX, SCORE_CAUTION_MAX
+from config import SCORE_UNSAFE_MAX, SCORE_CAUTION_MAX, SOURCE_WEIGHTS
 
 
 def calculate_final_score(results: list[dict]) -> float:
     """
-    Average the normalized scores returned by each API module.
+    Weighted average of the normalized scores returned by each API module.
+
+    Each source has a priority weight defined in config.SOURCE_WEIGHTS.
+    Sources with higher weight contribute more to the final score.
+    Unknown sources default to weight 1.
 
     Parameters
     ----------
@@ -11,13 +15,20 @@ def calculate_final_score(results: list[dict]) -> float:
 
     Returns
     -------
-    float  –  averaged score rounded to 2 decimal places, or 0.0 if empty
+    float  –  weighted score rounded to 2 decimal places, or 0.0 if empty
     """
     valid = [r for r in results if r is not None and "score" in r]
     if not valid:
         return 0.0
-    total = sum(r["score"] for r in valid)
-    return round(total / len(valid), 2)
+    weighted_total = sum(
+        r["score"] * SOURCE_WEIGHTS.get(r.get("source", ""), 1)
+        for r in valid
+    )
+    weight_sum = sum(
+        SOURCE_WEIGHTS.get(r.get("source", ""), 1)
+        for r in valid
+    )
+    return round(weighted_total / weight_sum, 2)
 
 
 def classify(score: float) -> str:
@@ -61,9 +72,15 @@ def build_report(url: str, results: list[dict]) -> str:
     else:
         label = "UNSAFE ❌"
 
-    # ── Per-source score breakdown ────────────────────────────────────────────
+    # ── Per-source score breakdown (sorted by priority weight) ─────────────
+    sorted_results = sorted(
+        [r for r in results if r is not None],
+        key=lambda r: SOURCE_WEIGHTS.get(r.get("source", ""), 1),
+        reverse=True,
+    )
     sources = "\n".join(
-        f"  - {r['source']}: {r['score']}%" for r in results if r is not None
+        f"  - {r['source']}: {r['score']}%"
+        for r in sorted_results
     )
 
     # ── Heuristic flags section (only when flags were raised) ─────────────────

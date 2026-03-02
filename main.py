@@ -21,6 +21,7 @@ from apis.virustotal           import check as vt_check
 from apis.urlscan              import check as us_check
 from apis.google_safe_browsing import check as gsb_check
 from apis.heuristics           import check as heuristics_check
+from apis.checkphish           import check as cp_check
 
 # ── Internal modules ───────────────────────────────────────────────────────────
 from scoring import build_report
@@ -34,7 +35,7 @@ URL_REGEX = re.compile(
     , re.IGNORECASE
 )
 
-API_CHECKS = [vt_check, us_check, gsb_check]
+API_CHECKS = [vt_check, us_check, gsb_check, cp_check]
 
 
 def extract_url(text: str) -> str | None:
