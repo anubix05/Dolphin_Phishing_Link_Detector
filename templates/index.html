@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dolphin – Phishing Link Detector</title>
+    <style>
+        /* ── CSS Variables ─────────────────────────────────────────── */
+        :root {
+            --accent: #2563eb;
+            --accent-hover: #3b82f6;
+        }
+
+        [data-theme="dark"] {
+            --bg-primary: #2b2b2b;
+            --bg-secondary: #1e1e1e;
+            --bg-tertiary: #383838;
+            --bg-input: #3a3a3a;
+            --bg-input-border: #505050;
+            --text-primary: #f0f0f0;
+            --text-secondary: #c0c0c0;
+            --text-tertiary: #999999;
+            --border: #444444;
+            --scrollbar: #505050;
+            --icon-btn-hover: #424242;
+            --bubble-user-bg: var(--accent);
+            --bubble-user-border: var(--accent);
+            --bubble-user-text: #ffffff;
+            --bubble-bot-bg: transparent;
+            --bubble-bot-border: #444444;
+        }
+
+        [data-theme="light"] {
+            --bg-primary: #ffffff;
+            --bg-secondary: #f9f9f9;
+            --bg-tertiary: #f0f0f0;
+            --bg-input: #ffffff;
+            --bg-input-border: #d9d9d9;
+            --text-primary: #0d0d0d;
+            --text-secondary: #4a4a4a;
+            --text-tertiary: #767676;
+            --border: #e5e5e5;
+            --scrollbar: #c5c5c5;
+            --icon-btn-hover: #ececec;
+            --bubble-user-bg: var(--accent);
+            --bubble-user-border: var(--accent);
+            --bubble-user-text: #ffffff;
+            --bubble-bot-bg: transparent;
+            --bubble-bot-border: #e5e5e5;
+        }
+
+        /* ── Reset & base ──────────────────────────────────────────── */
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body { height: 100%; }
+
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            transition: background .2s, color .2s;
+        }
+
+        /* ── Layout ────────────────────────────────────────────────── */
+        .app {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        /* ── Top bar ───────────────────────────────────────────────── */
+        .topbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 16px;
+            background: var(--bg-primary);
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+
+        .topbar-left {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .topbar-title {
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .theme-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            border: none;
+            border-radius: 8px;
+            background: transparent;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: background .15s;
+        }
+        .theme-toggle:hover {
+            background: var(--icon-btn-hover);
+        }
+        .theme-toggle svg {
+            width: 20px;
+            height: 20px;
+            fill: currentColor;
+        }
+
+        /* ── Main content area (holds welcome OR messages) ─────────── */
+        .chat-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* ── Landing state (input centered) ────────────────────────── */
+        .landing {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 40px 24px;
+            gap: 24px;
+            text-align: center;
+            transition: opacity .25s ease;
+        }
+
+        .app.started .landing { display: none; }
+
+        .landing-icon {
+            width: 56px;
+            height: 56px;
+            border-radius: 14px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 28px;
+        }
+
+        .landing h2 {
+            font-size: 22px;
+            font-weight: 600;
+        }
+
+        .landing p {
+            color: var(--text-secondary);
+            font-size: 15px;
+            line-height: 1.6;
+            max-width: 420px;
+        }
+
+        .landing-input {
+            width: 100%;
+            max-width: 600px;
+            display: flex;
+            align-items: center;
+            gap: 0;
+            background: var(--bg-input);
+            border: 1px solid var(--bg-input-border);
+            border-radius: 16px;
+            padding: 4px 4px 4px 16px;
+            transition: border-color .2s, box-shadow .2s;
+            margin-top: 8px;
+        }
+        .landing-input:focus-within {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 1px var(--accent);
+        }
+        .landing-input input {
+            flex: 1;
+            padding: 12px 0;
+            border: none;
+            background: transparent;
+            color: var(--text-primary);
+            font-size: 15px;
+            outline: none;
+        }
+        .landing-input input::placeholder { color: var(--text-tertiary); }
+
+        .landing-hints {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .hint {
+            padding: 10px 16px;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            font-size: 13px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: background .15s, border-color .15s;
+            background: transparent;
+        }
+        .hint:hover {
+            background: var(--bg-tertiary);
+            border-color: var(--text-tertiary);
+        }
+
+        .landing-footer {
+            font-size: 12px;
+            color: var(--text-tertiary);
+        }
+
+        /* ── Messages area (hidden until started) ──────────────────── */
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            scroll-behavior: smooth;
+            display: none;
+            padding: 20px 24px;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .app.started .chat-messages { display: flex; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(4px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        /* ── Message bubbles ──────────────────────────────────────── */
+        .message-row {
+            display: flex;
+            gap: 12px;
+            max-width: 680px;
+            width: 100%;
+            margin: 0 auto;
+            animation: fadeIn .3s ease;
+        }
+
+        .message-row.user {
+            flex-direction: row-reverse;
+        }
+
+        .message-avatar {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 13px;
+            flex-shrink: 0;
+            margin-top: 4px;
+        }
+
+        .message-row.user .message-avatar {
+            width: 36px;
+            height: 36px;
+            background: var(--accent);
+            color: #fff;
+            font-weight: 600;
+            font-size: 13px;
+        }
+
+        .message-row.bot .message-avatar {
+            width: 36px;
+            height: 36px;
+            font-size: 16px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+        }
+
+        .message-bubble {
+            padding: 12px 16px;
+            border-radius: 18px;
+            line-height: 1.6;
+            font-size: 14.5px;
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-width: 75%;
+        }
+
+        .message-row.user .message-bubble {
+            background: var(--bubble-user-bg);
+            border: 1px solid var(--bubble-user-border);
+            color: var(--bubble-user-text);
+            border-top-right-radius: 4px;
+        }
+
+        .message-row.bot .message-bubble {
+            background: var(--bubble-bot-bg);
+            border: 1px solid var(--bubble-bot-border);
+            border-top-left-radius: 4px;
+        }
+
+        .message-bubble .safe       { color: #16a34a; font-weight: 600; }
+        .message-bubble .caution    { color: #ca8a04; font-weight: 600; }
+        .message-bubble .unsafe     { color: #dc2626; font-weight: 600; }
+
+        /* ── Typing indicator ──────────────────────────────────────── */
+        .typing-row {
+            display: flex;
+            gap: 12px;
+            max-width: 680px;
+            width: 100%;
+            margin: 0 auto;
+            animation: fadeIn .3s ease;
+        }
+
+        .typing-bubble {
+            padding: 14px 18px;
+            border-radius: 18px;
+            border-top-left-radius: 4px;
+            border: 1px solid var(--bubble-bot-border);
+            display: flex;
+            gap: 5px;
+            align-items: center;
+        }
+        .typing-bubble span {
+            width: 7px;
+            height: 7px;
+            background: var(--text-tertiary);
+            border-radius: 50%;
+            animation: bounce 1.4s infinite both;
+        }
+        .typing-bubble span:nth-child(2) { animation-delay: .16s; }
+        .typing-bubble span:nth-child(3) { animation-delay: .32s; }
+        @keyframes bounce {
+            0%, 80%, 100% { transform: scale(0); }
+            40%           { transform: scale(1); }
+        }
+
+        /* ── Bottom input (hidden until started) ───────────────────── */
+        .input-wrapper {
+            flex-shrink: 0;
+            padding: 12px 16px 20px;
+            background: var(--bg-secondary);
+            display: none;
+        }
+
+        .app.started .input-wrapper { display: block; }
+
+        .input-container {
+            max-width: 680px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            gap: 0;
+            background: var(--bg-input);
+            border: 1px solid var(--bg-input-border);
+            border-radius: 16px;
+            padding: 4px 4px 4px 16px;
+            transition: border-color .2s, box-shadow .2s;
+        }
+        .input-container:focus-within {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 1px var(--accent);
+        }
+
+        .input-container input {
+            flex: 1;
+            padding: 10px 0;
+            border: none;
+            background: transparent;
+            color: var(--text-primary);
+            font-size: 15px;
+            outline: none;
+        }
+        .input-container input::placeholder {
+            color: var(--text-tertiary);
+        }
+
+        .send-btn {
+            width: 36px;
+            height: 36px;
+            border: none;
+            border-radius: 10px;
+            background: var(--accent);
+            color: #fff;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background .15s, opacity .15s;
+            flex-shrink: 0;
+        }
+        .send-btn:hover { background: var(--accent-hover); }
+        .send-btn:disabled {
+            opacity: .4;
+            cursor: not-allowed;
+        }
+        .send-btn svg {
+            width: 18px;
+            height: 18px;
+            fill: currentColor;
+        }
+
+        .input-footer {
+            text-align: center;
+            font-size: 12px;
+            color: var(--text-tertiary);
+            margin-top: 8px;
+        }
+
+        /* ── Scrollbar ─────────────────────────────────────────────── */
+        .chat-messages::-webkit-scrollbar { width: 6px; }
+        .chat-messages::-webkit-scrollbar-track { background: transparent; }
+        .chat-messages::-webkit-scrollbar-thumb {
+            background: var(--scrollbar);
+            border-radius: 3px;
+        }
+
+        /* ── Responsive ────────────────────────────────────────────── */
+        @media (max-width: 600px) {
+            .message-row { max-width: 100%; }
+            .chat-messages { padding: 16px 12px; }
+            .landing-hints { flex-direction: column; }
+            .message-bubble { max-width: 85%; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="app" id="app">
+    <!-- Top bar -->
+    <div class="topbar">
+        <div class="topbar-left">
+            <span style="font-size: 22px;">🐬</span>
+            <span class="topbar-title">Dolphin</span>
+        </div>
+        <button class="theme-toggle" id="themeToggle" title="Toggle theme" onclick="toggleTheme()">
+            <img id="sunIcon" src="/static/light-mode.png" alt="Light mode" style="display:none; width:25px; height:25px;" />
+            <img id="moonIcon" src="/static/dark-mode.png" alt="Dark mode" style="display:none; width:25px; height:25px;" />
+        </button>
+    </div>
+
+    <div class="chat-area">
+        <!-- Landing (centered input) -->
+        <div class="landing" id="landing">
+            <div class="landing-icon">🐬</div>
+            <h2>Welcome!</h2>
+            <p>Paste any link and I'll scan and check its safety.</p>
+            <div class="landing-input">
+                <input
+                    type="text"
+                    id="landingInput"
+                    placeholder="Paste a URL to check…"
+                    autocomplete="off"
+                />
+                <button class="send-btn" onclick="sendLink()" title="Send">
+                    <svg viewBox="0 0 24 24"><path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94l18.04-8.25a.75.75 0 000-1.39L3.478 2.405z"/></svg>
+                </button>
+            </div>
+            <div class="landing-hints">
+                <button class="hint" onclick="useHint('https://example.com')">Try https://example.com</button>
+                <button class="hint" onclick="useHint('https://google.com')">Try https://google.com</button>
+            </div>
+            <div class="landing-footer">Dolphin checks links using multiple security APIs © MITS KOCHI | CY '27</div>
+        </div>
+
+        <!-- Messages (shown after first send) -->
+        <div class="chat-messages" id="chatMessages"></div>
+    </div>
+
+    <!-- Bottom input (shown after first send) -->
+    <div class="input-wrapper">
+        <div class="input-container">
+            <input
+                type="text"
+                id="linkInput"
+                placeholder="Paste a URL to check…"
+                autocomplete="off"
+            />
+            <button class="send-btn" id="sendBtn" onclick="sendLink()" title="Send">
+                <svg viewBox="0 0 24 24"><path d="M3.478 2.405a.75.75 0 00-.926.94l2.432 7.905H13.5a.75.75 0 010 1.5H4.984l-2.432 7.905a.75.75 0 00.926.94l18.04-8.25a.75.75 0 000-1.39L3.478 2.405z"/></svg>
+            </button>
+        </div>
+        <div class="input-footer">Dolphin checks links using multiple security APIs © MITS KOCHI | CY '27</div>
+    </div>
+</div>
+
+<script>
+const appEl        = document.getElementById("app");
+const chatMessages = document.getElementById("chatMessages");
+const landingInput = document.getElementById("landingInput");
+const linkInput    = document.getElementById("linkInput");
+const sendBtn      = document.getElementById("sendBtn");
+let   started      = false;
+
+// ── Theme ─────────────────────────────────────────────────────────────────
+function applyTheme(theme) {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("dolphin-theme", theme);
+    document.getElementById("sunIcon").style.display  = theme === "dark" ? "block" : "none";
+    document.getElementById("moonIcon").style.display = theme === "light" ? "block" : "none";
+}
+
+function toggleTheme() {
+    const current = document.documentElement.getAttribute("data-theme");
+    applyTheme(current === "dark" ? "light" : "dark");
+}
+
+applyTheme(localStorage.getItem("dolphin-theme") || "dark");
+
+// ── Transition to chat mode ───────────────────────────────────────────────
+function activateChat() {
+    if (started) return;
+    started = true;
+    appEl.classList.add("started");
+    linkInput.focus();
+}
+
+// ── Get the currently active input ────────────────────────────────────────
+function getActiveInput() {
+    return started ? linkInput : landingInput;
+}
+
+// ── Hints ─────────────────────────────────────────────────────────────────
+function useHint(url) {
+    getActiveInput().value = url;
+    sendLink();
+}
+
+// Send on Enter key (both inputs)
+landingInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") sendLink();
+});
+linkInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !sendBtn.disabled) sendLink();
+});
+
+function addMessage(text, type) {
+    const row = document.createElement("div");
+    row.classList.add("message-row", type);
+
+    const avatar = document.createElement("div");
+    avatar.classList.add("message-avatar");
+    avatar.textContent = type === "user" ? "🙂" : "🐬";
+
+    const bubble = document.createElement("div");
+    bubble.classList.add("message-bubble");
+
+    if (type === "bot") {
+        bubble.innerHTML = formatReport(text);
+    } else {
+        bubble.textContent = text;
+    }
+
+    row.appendChild(avatar);
+    row.appendChild(bubble);
+    chatMessages.appendChild(row);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+function showTyping() {
+    const row = document.createElement("div");
+    row.classList.add("typing-row");
+    row.id = "typingIndicator";
+
+    const avatar = document.createElement("div");
+    avatar.classList.add("message-avatar");
+    avatar.style.background = "var(--bg-tertiary)";
+    avatar.style.border = "1px solid var(--border)";
+    avatar.textContent = "🐬";
+
+    const bubble = document.createElement("div");
+    bubble.classList.add("typing-bubble");
+    bubble.innerHTML = "<span></span><span></span><span></span>";
+
+    row.appendChild(avatar);
+    row.appendChild(bubble);
+    chatMessages.appendChild(row);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+function hideTyping() {
+    const el = document.getElementById("typingIndicator");
+    if (el) el.remove();
+}
+
+function formatReport(text) {
+    let html = text
+        .replace(/SAFE ✅/g,                     '<span class="safe">SAFE ✅</span>')
+        .replace(/AVERAGE \/ USE CAUTION ⚠️/g, '<span class="caution">AVERAGE / USE CAUTION ⚠️</span>')
+        .replace(/UNSAFE ❌/g,                   '<span class="unsafe">UNSAFE ❌</span>');
+
+    html = html.replace(/\*(.*?)\*/g, "<strong>$1</strong>");
+    return html;
+}
+
+async function sendLink() {
+    const input = getActiveInput();
+    const url = input.value.trim();
+    if (!url) return;
+
+    // Transition to chat mode on first send
+    activateChat();
+
+    addMessage(url, "user");
+    linkInput.value = "";
+    sendBtn.disabled = true;
+
+    showTyping();
+
+    try {
+        const res = await fetch("/check", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url })
+        });
+
+        const data = await res.json();
+        hideTyping();
+
+        if (data.error) {
+            addMessage("⚠️ " + data.error, "bot");
+        } else {
+            addMessage(data.report, "bot");
+        }
+    } catch (err) {
+        hideTyping();
+        addMessage("❌ Network error — could not reach the server.", "bot");
+    } finally {
+        sendBtn.disabled = false;
+        linkInput.focus();
+    }
+}
+</script>
+
+</body>
+</html>

@@ -13,7 +13,7 @@ Responsibilities
 import re
 import concurrent.futures
 
-from flask import Flask, request, Response
+from flask import Flask, request, Response, render_template, jsonify
 from twilio.twiml.messaging_response import MessagingResponse  # type: ignore[import-untyped]
 
 # ── API modules ────────────────────────────────────────────────────────────────
@@ -59,6 +59,37 @@ def run_all_checks(url: str) -> list[dict]:
             except Exception as exc:
                 print(f"[ERROR] {module_name} raised an exception: {exc}")
     return results
+
+
+# ── Web UI ─────────────────────────────────────────────────────────────────────
+@app.route("/")
+def index():
+    """Serve the chatbot-style web interface."""
+    return render_template("index.html")
+
+
+@app.route("/check", methods=["POST"])
+def check():
+    """
+    JSON API for the web UI (no Twilio involved).
+
+    Expects: { "url": "https://example.com" }
+    Returns: { "report": "..." } or { "error": "..." }
+    """
+    data = request.get_json(silent=True) or {}
+    raw  = data.get("url", "").strip()
+
+    url = extract_url(raw)
+    if not url:
+        return jsonify({"error": "I couldn't find a valid URL. Please send a link starting with http:// or https://"})
+
+    results = run_all_checks(url)
+
+    if not results:
+        return jsonify({"error": "All safety checks failed. Please try again later."})
+
+    report = build_report(url, results)
+    return jsonify({"report": report})
 
 
 # ── Webhook ────────────────────────────────────────────────────────────────────
