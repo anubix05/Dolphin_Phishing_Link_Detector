@@ -13,10 +13,9 @@ Real implementation steps:
 API Docs: https://developers.google.com/safe-browsing/v4/lookup-api
 """
 
-# TODO: Remove this stub import once real logic is implemented
-import random
+import requests
 
-from config import GOOGLE_SAFE_BROWSING_API_KEY  # noqa: F401  (will be used in real impl)
+from config import GOOGLE_SAFE_BROWSING_API_KEY  # noqa: F401  (used below)
 
 
 def check(url: str) -> dict:
@@ -35,8 +34,44 @@ def check(url: str) -> dict:
 
     TODO: Replace stub body with real API call.
     """
-    # ── STUB – returns a random score for development/testing ─────────────────
-    # Remove the two lines below and add real API logic here.
-    stub_score = random.randint(0, 100)
-    return {"score": stub_score, "source": "Google Safe Browsing"}
+    # ── REAL IMPLEMENTATION ─────────────────────────────────────────────────
+    # Build request payload according to Google Safe Browsing API documentation.
+    api_url = (
+        "https://safebrowsing.googleapis.com/v4/threatMatches:find"
+        f"?key={GOOGLE_SAFE_BROWSING_API_KEY}"
+    )
+
+    payload = {
+        "client": {
+            "clientId": "dolphin-phishing-bot",
+            "clientVersion": "1.0",
+        },
+        "threatInfo": {
+            "threatTypes": [
+                "MALWARE",
+                "SOCIAL_ENGINEERING",
+                "UNWANTED_SOFTWARE",
+                "POTENTIALLY_HARMFUL_APPLICATION",
+            ],
+            "platformTypes": ["ANY_PLATFORM"],
+            "threatEntryTypes": ["URL"],
+            "threatEntries": [{"url": url}],
+        },
+    }
+
+    try:
+        resp = requests.post(api_url, json=payload, timeout=10)
+        resp.raise_for_status()
+    except requests.RequestException:
+        # In case of network or API errors we fall back to conservative score of 50
+        return {"score": 50, "source": "Google Safe Browsing"}
+
+    data = resp.json()
+    # If any matches are returned, treat URL as malicious.
+    if data.get("matches"):
+        score = 0
+    else:
+        score = 100
+
+    return {"score": score, "source": "Google Safe Browsing"}
     # ─────────────────────────────────────────────────────────────────────────
