@@ -1,0 +1,671 @@
+================================================================================
+        DOLPHIN – PHISHING LINK DETECTION WHATSAPP CHATBOT
+                     PROJECT DOCUMENTATION
+================================================================================
+
+Last updated: March 2026
+
+
+TABLE OF CONTENTS
+-----------------
+  1. Project Overview
+  2. Features
+  3. Architecture & Project Structure
+  4. Module Descriptions
+     4.1  main.py
+     4.2  config.py
+     4.3  scoring.py
+     4.4  apis/virustotal.py
+     4.5  apis/urlscan.py
+     4.6  apis/google_safe_browsing.py
+     4.7  apis/checkphish.py
+     4.8  apis/heuristics.py
+     4.9  templates/index.html
+  5. Scoring System
+     5.1  Weighted Average
+     5.2  Source Priority Weights
+     5.3  Safety Classification
+  6. Heuristic Analysis Engine
+  7. API Communication Flow
+  8. WhatsApp Integration (Twilio)
+  9. Web UI
+ 10. Endpoints
+ 11. Report Format
+ 12. Error Handling & Fallbacks
+ 13. Adding a New API
+ 14. Dependencies
+ 15. Setup & Running
+ 16. Design Principles
+
+
+================================================================================
+1. PROJECT OVERVIEW
+================================================================================
+
+Dolphin is a modular, scalable phishing link detection system that operates
+through two interfaces:
+
+  - A WhatsApp chatbot (powered by Twilio)
+  - A web-based chat UI
+
+When a user sends a URL, the system:
+
+  1. Extracts the URL from the message.
+  2. Runs the URL against multiple security APIs concurrently.
+  3. Performs local heuristic analysis on the URL structure.
+  4. Normalizes all results to a 0–100 safety scale.
+  5. Computes a weighted average score.
+  6. Classifies the link (Safe / Caution / Unsafe).
+  7. Returns a detailed safety report to the user.
+
+
+================================================================================
+2. FEATURES
+================================================================================
+
+  - Multi-API phishing detection
+      Five independent analysis sources are queried for each URL:
+      VirusTotal, URLScan.io, Google Safe Browsing, CheckPhish, and a
+      built-in heuristic engine.
+
+  - Weighted scoring system
+      Each source has a configured priority weight so that more reliable
+      sources (e.g. Google Safe Browsing) have greater influence on the
+      final score.
+
+  - 18-check local heuristic engine
+      Performs deep structural analysis of the URL without any external
+      API call. Detects IP-as-host, phishing keywords, brand
+      impersonation, suspicious TLDs, URL shorteners, executable file
+      extensions, and more.
+
+  - Asynchronous WhatsApp replies
+      The Twilio webhook returns immediately (within Twilio's 15-second
+      timeout) while API checks run in a background thread. The final
+      report is sent via the Twilio REST API, ensuring reliable delivery.
+
+  - Concurrent API calls
+      External API checks run in parallel using a ThreadPoolExecutor,
+      minimizing total wait time.
+
+  - Web chat interface
+      A browser-based chat UI at the root URL (/) provides the same
+      analysis without needing WhatsApp.
+
+  - Graceful degradation
+      If any individual API fails, it is excluded from the final score.
+      If all APIs fail, the user receives a clear error message.
+
+  - Google Safe Browsing 0% warning
+      When Google Safe Browsing returns a 0% score (threat detected),
+      the per-source breakdown line is annotated with an explicit
+      "UNSAFE – threat detected by Google" label.
+
+  - Modular, extensible design
+      Adding a new detection API requires only creating a new file in
+      the apis/ folder and registering it in main.py.
+
+
+================================================================================
+3. ARCHITECTURE & PROJECT STRUCTURE
+================================================================================
+
+  project/
+  │
+  ├── main.py                        Flask app, webhook, web API
+  ├── config.py                      API keys, weights, thresholds
+  ├── scoring.py                     Score calculation, classification, report
+  ├── requirements.txt               Python dependencies
+  ├── AGENTS.md                      Agent instructions / project spec
+  ├── DOCUMENTATION.txt              This file
+  │
+  ├── apis/
+  │   ├── __init__.py
+  │   ├── virustotal.py              VirusTotal v3 integration
+  │   ├── urlscan.py                 URLScan.io integration
+  │   ├── google_safe_browsing.py    Google Safe Browsing v4 integration
+  │   ├── checkphish.py              CheckPhish (Bolster) integration
+  │   └── heuristics.py             Local heuristic analysis engine
+  │
+  ├── templates/
+  │   └── index.html                 Web chat UI (dark/light theme)
+  │
+  └── static/                        (static assets placeholder)
+
+
+================================================================================
+4. MODULE DESCRIPTIONS
+================================================================================
+
+
+4.1  main.py
+------------
+The central Flask application. Responsibilities:
+
+  - Serves the web UI at GET /
+  - Handles the Twilio WhatsApp webhook at POST /webhook
+  - Provides a JSON API for the web UI at POST /check
+  - Extracts URLs from incoming messages using regex
+  - Runs the heuristic check first (instant, local), then fires all
+    external API modules concurrently via ThreadPoolExecutor
+  - For WhatsApp: returns an empty TwiML response immediately, then
+    processes checks in a background thread and sends the report via
+    the Twilio REST API (avoids Twilio's 15s webhook timeout)
+  - For the web UI: processes synchronously and returns JSON
+
+Key functions:
+  - extract_url(text)       → first URL found, or None
+  - run_all_checks(url)     → list of result dicts from all sources
+  - _process_and_reply()    → background thread function for WhatsApp
+  - webhook()               → POST /webhook handler
+  - check()                 → POST /check handler
+  - index()                 → GET / handler
+
+
+4.2  config.py
+--------------
+Centralized configuration. All values support environment variable
+overrides (os.getenv with hardcoded defaults).
+
+  Settings:
+  - TWILIO_ACCOUNT_SID          Twilio account SID
+  - TWILIO_AUTH_TOKEN            Twilio auth token
+  - TWILIO_WHATSAPP_NUMBER       Twilio WhatsApp sender number
+  - VIRUSTOTAL_API_KEY           VirusTotal v3 API key
+  - URLSCAN_API_KEY              URLScan.io API key
+  - GOOGLE_SAFE_BROWSING_API_KEY Google Safe Browsing v4 API key
+  - CHECKPHISH_API_KEY           CheckPhish (Bolster) API key
+  - SOURCE_WEIGHTS               dict mapping source names to priority weights
+  - SCORE_UNSAFE_MAX             upper bound for "Unsafe" classification (33)
+  - SCORE_CAUTION_MAX            upper bound for "Caution" classification (66)
+
+
+4.3  scoring.py
+---------------
+Scoring logic and report generation.
+
+  Functions:
+  - calculate_final_score(results)
+      Computes a weighted average of all API scores using SOURCE_WEIGHTS.
+      Unknown sources default to weight 1. Returns float (0.0–100.0).
+
+  - classify(score)
+      Maps a numeric score to a classification string:
+        0–33  → "UNSAFE"
+        34–66 → "CAUTION"
+        67–100→ "SAFE"
+
+  - build_report(url, results)
+      Constructs a formatted text report including:
+        - The scanned URL
+        - Final weighted safety score
+        - Classification label with emoji
+        - Per-source score breakdown (sorted by weight)
+        - Google Safe Browsing 0% UNSAFE annotation
+        - Heuristic red flags section (if any detected)
+
+
+4.4  apis/virustotal.py
+-----------------------
+VirusTotal v3 API integration.
+
+  Flow:
+  1. POST the URL to /api/v3/urls to submit for analysis.
+  2. Poll GET /api/v3/analyses/{id} until status == "completed" (up to 30s).
+  3. Read the stats dict (harmless, malicious, suspicious, etc.).
+  4. Normalize: score = (1 - malicious/total) * 100, clamped to 1–100.
+
+  Fallback: Returns score 1 (conservative) on any error.
+  Return format: {"score": int, "source": "VirusTotal"}
+
+
+4.5  apis/urlscan.py
+--------------------
+URLScan.io API integration.
+
+  Flow:
+  1. POST the URL to /api/v1/scan/ (public visibility).
+  2. Poll GET /api/v1/result/{uuid}/ until 200 OK (up to 40s).
+  3. Read verdicts.overall.score (maliciousness 0–100) and malicious flag.
+  4. Invert: safety_score = 100 - maliciousness_score.
+  5. If malicious flag is True, cap score at 10.
+
+  Fallback: Returns score 50 (neutral) on errors or scan timeout.
+  Return format: {"score": int, "source": "URLScan"}
+
+
+4.6  apis/google_safe_browsing.py
+---------------------------------
+Google Safe Browsing v4 Lookup API integration.
+
+  Flow:
+  1. POST to /v4/threatMatches:find with threat types:
+     MALWARE, SOCIAL_ENGINEERING, UNWANTED_SOFTWARE,
+     POTENTIALLY_HARMFUL_APPLICATION.
+  2. If any matches returned → score = 0 (threat detected).
+  3. If no matches → score = 100 (clean).
+
+  Fallback: Returns score 50 on network/API errors.
+  Return format: {"score": int, "source": "Google Safe Browsing"}
+
+
+4.7  apis/checkphish.py
+-----------------------
+CheckPhish (Bolster) API integration.
+
+  Flow:
+  1. POST to /api/neo/scan with the URL and API key.
+  2. Poll POST /api/neo/scan/status with the jobID (up to 40s).
+  3. Map the disposition string to a safety score via lookup table:
+       clean/no_phishing/benign → 100
+       phish/phishing/malware   → 0
+       scam/tech_support_scam   → 5
+       suspicious/spam          → 30
+       (and others – see VERDICT_SCORES dict)
+
+  Fallback: Returns score 50 on errors, missing API key, or timeout.
+  Return format: {"score": int, "source": "CheckPhish"}
+
+
+4.8  apis/heuristics.py
+-----------------------
+Local heuristic analysis engine – no external API calls required.
+
+  Performs 18 structural checks on the URL:
+
+   #  | Check                          | Penalty
+  ----+--------------------------------+---------
+   1  | IP address as host             |   40
+   2  | Excessive URL length (>150)    |   18
+   2b | Long URL (>100)                |    8
+   3  | '@' symbol in URL              |   45
+   4  | Double slash in path           |   10
+   5  | Percent-encoding in hostname   |   35
+   6  | IDN / Punycode domain          |   30
+   7  | Excessive subdomain depth (≥3) |   20
+   8  | Many hyphens in domain (≥3)    |   18
+   9  | Suspicious TLD                 |   22
+  10  | Known URL shortener            |   22
+  11  | Brand name in subdomain        |   35
+  12  | Phishing keywords in path      | 8-30
+  13  | Non-standard port              |   18
+  14  | Suspicious file extension      |   40
+  15  | Digit-letter mixing (l33tspk)  |   18
+  16  | Redirect/tracking pattern      |   18
+  17  | Unencrypted HTTP scheme        |   10
+  18  | Excessive dots in path (≥5)    |   12
+
+  Score computation uses exponential decay:
+    score = 100 * e^(-0.023 * total_penalty)
+  Clamped to 1–100.
+
+  Return format:
+    {
+      "score": int,
+      "source": "Heuristics",
+      "flags": [{"name": str, "description": str, "penalty": int}, ...]
+    }
+
+  Known brand keywords monitored: paypal, google, facebook, microsoft,
+  apple, amazon, netflix, instagram, twitter, linkedin, dropbox, chase,
+  wellsfargo, bankofamerica, citibank, ebay, steam, spotify, discord,
+  whatsapp, telegram, yahoo, outlook, office365, onedrive, icloud,
+  coinbase, binance.
+
+  Suspicious TLDs monitored: xyz, tk, ml, ga, cf, gq, pw, cc, top,
+  work, click, link, zip, review, country, kim, science, party, gdn,
+  stream, download, racing, win, loan, date, faith, trade, accountant,
+  icu, buzz, vip, club, live.
+
+  URL shorteners detected: bit.ly, t.co, tinyurl.com, goo.gl, ow.ly,
+  is.gd, buff.ly, adf.ly, bc.vc, j.mp, tiny.cc, lnkd.in, db.tt,
+  qr.ae, po.st, 1url.com, hyperurl.co, rb.gy, shorturl.at, cutt.ly,
+  rebrand.ly, snip.ly.
+
+
+4.9  templates/index.html
+-------------------------
+A single-page web chat UI with:
+  - Dark and light theme toggle
+  - Chat bubble interface (user messages on right, bot on left)
+  - Landing page with example hints
+  - Animated typing indicator while checks run
+  - Responsive design for mobile and desktop
+  - Sends POST requests to /check endpoint
+
+
+================================================================================
+5. SCORING SYSTEM
+================================================================================
+
+
+5.1  Weighted Average
+---------------------
+The final score is a weighted average, not a simple mean:
+
+  Final Score = Σ (score_i × weight_i) / Σ (weight_i)
+
+This ensures that higher-trust sources contribute proportionally more
+to the final result.
+
+
+5.2  Source Priority Weights
+----------------------------
+Configured in config.py (SOURCE_WEIGHTS):
+
+  Source                  | Weight | Priority
+  ------------------------+--------+---------
+  Google Safe Browsing    |   5    | Highest
+  VirusTotal              |   4    |
+  CheckPhish              |   3    |
+  URLScan                 |   2    |
+  Heuristics              |   1    | Lowest
+
+Rationale: Google Safe Browsing and VirusTotal have the largest threat
+databases and fastest update cycles. Heuristics are useful supplementary
+signals but can produce false positives, so they carry the least weight.
+
+
+5.3  Safety Classification
+--------------------------
+The final weighted score maps to three tiers:
+
+  Score Range | Classification          | Label
+  ------------+-------------------------+-------------------------
+  0 – 33      | UNSAFE                  | UNSAFE ❌
+  34 – 66     | CAUTION                 | AVERAGE / USE CAUTION ⚠️
+  67 – 100    | SAFE                    | SAFE ✅
+
+Thresholds are configurable via SCORE_UNSAFE_MAX and SCORE_CAUTION_MAX
+in config.py.
+
+
+================================================================================
+6. HEURISTIC ANALYSIS ENGINE
+================================================================================
+
+The heuristic engine (apis/heuristics.py) performs 18 structural checks
+on the URL without making any external network requests. This means it:
+
+  - Is instant (no latency)
+  - Works offline
+  - Requires no API key
+  - Catches phishing patterns that API databases may not yet know about
+
+Each check assigns a penalty value. Penalties are accumulated and
+converted to a safety score using exponential decay:
+
+  score = 100 × e^(−0.023 × total_penalty)
+
+This curve ensures that:
+  - No flags        → score ≈ 100
+  - Moderate flags  → score drops sharply
+  - Many flags      → score approaches 1 but never reaches 0
+
+Heuristic flags are included in the safety report so the user can see
+exactly which structural red flags were detected.
+
+
+================================================================================
+7. API COMMUNICATION FLOW
+================================================================================
+
+  User sends URL
+       │
+       ▼
+  ┌─────────────────┐
+  │  Extract URL     │
+  └────────┬────────┘
+           │
+      ┌────┴────────────────────────────────────┐
+      │                                          │
+      ▼                                          ▼
+  Heuristic Check                    ThreadPoolExecutor
+  (local, instant)                   (concurrent external calls)
+      │                              ┌───┬───┬───┐
+      │                              │   │   │   │
+      │                              VT  US GSB  CP
+      │                              │   │   │   │
+      ▼                              └───┴───┴───┘
+  Collect all results ◄──────────────────┘
+      │
+      ▼
+  Calculate weighted score
+      │
+      ▼
+  Classify (Safe / Caution / Unsafe)
+      │
+      ▼
+  Build & send report
+
+  VT  = VirusTotal
+  US  = URLScan
+  GSB = Google Safe Browsing
+  CP  = CheckPhish
+
+
+================================================================================
+8. WHATSAPP INTEGRATION (TWILIO)
+================================================================================
+
+The WhatsApp integration uses Twilio's Messaging API in two stages:
+
+  Stage 1 – Webhook (POST /webhook)
+  ----------------------------------
+  Twilio sends incoming WhatsApp messages to this endpoint. The handler:
+    1. Extracts the URL from the message body.
+    2. If no URL is found, replies inline with TwiML (instant).
+    3. If a URL is found, spawns a background thread and returns an
+       empty TwiML response immediately.
+
+  This is critical because Twilio enforces a 15-second timeout on
+  webhook responses. The external API checks (VirusTotal, URLScan,
+  CheckPhish) each poll for up to 30–40 seconds, which would exceed
+  this limit.
+
+  Stage 2 – Background Thread (_process_and_reply)
+  --------------------------------------------------
+  The background thread:
+    1. Runs all API checks (heuristic + external concurrent).
+    2. Builds the safety report.
+    3. Sends the report to the user via Twilio REST API
+       (twilio_client.messages.create).
+
+  This ensures the user always receives a reply regardless of how long
+  the analysis takes.
+
+
+================================================================================
+9. WEB UI
+================================================================================
+
+The web UI is served at GET / and provides a chat-style interface:
+
+  - Landing page with a centered input field and example hint URLs
+  - User messages appear as blue bubbles on the right
+  - Bot responses appear as bordered bubbles on the left
+  - Animated typing indicator while the scan runs
+  - Dark/light theme toggle in the top bar
+  - Responsive layout for desktop and mobile
+  - Communicates with the server via POST /check (JSON API)
+
+
+================================================================================
+10. ENDPOINTS
+================================================================================
+
+  Method | Path     | Purpose
+  -------+----------+---------------------------------------------------
+  GET    | /        | Serve the web chat UI (index.html)
+  POST   | /check   | JSON API for web UI. Accepts {"url": "..."}.
+         |          | Returns {"report": "..."} or {"error": "..."}.
+  POST   | /webhook | Twilio WhatsApp webhook. Receives form-encoded
+         |          | data (Body, From). Returns TwiML XML.
+
+
+================================================================================
+11. REPORT FORMAT
+================================================================================
+
+The safety report sent to users follows this format:
+
+  ---------------------------------------------------------------
+  🔍 Safety Report
+
+  URL: https://example.com
+
+  Final Safety Score: 78.5%
+
+  Classification: SAFE ✅
+
+  Score by source:
+    - Google Safe Browsing: 100%
+    - VirusTotal: 95%
+    - CheckPhish: 100%
+    - URLScan: 80%
+    - Heuristics: 72%
+
+  🧠 Heuristic Red Flags (2 detected):
+    ⚑ Long URL: URL is 105 characters long (moderately suspicious).
+    ⚑ Phishing keywords in URL: Suspicious terms detected: login.
+  ---------------------------------------------------------------
+
+Special annotations:
+  - If Google Safe Browsing returns 0%, its line reads:
+    "- Google Safe Browsing: 0%  ⛔ UNSAFE – threat detected by Google"
+
+  - If no heuristic flags are detected:
+    "🧠 Heuristics: No structural red flags detected ✅"
+
+  - Sources are sorted by priority weight (highest first).
+
+
+================================================================================
+12. ERROR HANDLING & FALLBACKS
+================================================================================
+
+Each API module handles errors independently:
+
+  Source                 | Fallback Score | Condition
+  -----------------------+----------------+-----------------------------
+  VirusTotal             |  1             | Any error, missing key
+  URLScan                | 50             | Network error, timeout, 400
+  Google Safe Browsing   | 50             | Network/API error
+  CheckPhish             | 50             | Error, missing key, timeout
+  Heuristics             | (always works) | Local analysis, no network
+
+General error handling:
+  - If an individual API raises an exception during concurrent
+    execution, it is caught, logged, and excluded from results.
+  - If ALL APIs fail, the user receives:
+    "❌ All safety checks failed. Please try again later."
+  - Invalid/missing URLs prompt:
+    "⚠️ I couldn't find a URL in your message."
+
+
+================================================================================
+13. ADDING A NEW API
+================================================================================
+
+To integrate a new phishing detection API:
+
+  1. Create a new file: apis/new_api_name.py
+
+  2. Implement a check(url: str) -> dict function that returns:
+       {"score": <int 0-100>, "source": "<API Name>"}
+
+  3. Add the API key to config.py:
+       NEW_API_KEY = os.getenv("NEW_API_KEY", "default_key_here")
+
+  4. Add a weight to SOURCE_WEIGHTS in config.py:
+       "New API Name": <weight>,
+
+  5. Import and register in main.py:
+       from apis.new_api_name import check as new_check
+       # Add new_check to the API_CHECKS list
+
+  6. The scoring, classification, and report generation will
+     automatically pick up the new source.
+
+
+================================================================================
+14. DEPENDENCIES
+================================================================================
+
+Listed in requirements.txt:
+
+  Package         | Min Version | Purpose
+  ----------------+-------------+--------------------------------------
+  flask           | 3.0.0       | Web framework, routing, templates
+  twilio          | 9.0.0       | WhatsApp messaging (TwiML + REST API)
+  requests        | 2.31.0      | HTTP requests to external APIs
+  python-dotenv   | 1.0.0       | Environment variable loading
+
+Python version: 3.10+ (uses type hints like str | None, list[dict])
+
+
+================================================================================
+15. SETUP & RUNNING
+================================================================================
+
+  1. Install dependencies:
+       pip install -r requirements.txt
+
+  2. Configure API keys:
+     Either edit config.py directly or set environment variables:
+       TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_NUMBER,
+       VIRUSTOTAL_API_KEY, URLSCAN_API_KEY,
+       GOOGLE_SAFE_BROWSING_API_KEY, CHECKPHISH_API_KEY
+
+  3. Start the Flask server:
+       python main.py
+     Server runs on http://localhost:5000
+
+  4. For WhatsApp integration:
+     a. Expose port 5000 via ngrok:
+          ngrok http 5000
+     b. Set the ngrok HTTPS URL as the Twilio webhook:
+          https://<ngrok-id>.ngrok.io/webhook
+     c. Configure in Twilio Console → Messaging → WhatsApp Sandbox
+
+  5. Access the web UI:
+       Open http://localhost:5000 in a browser
+
+
+================================================================================
+16. DESIGN PRINCIPLES
+================================================================================
+
+  - Modular architecture
+      Each API is self-contained in its own file. No API logic in main.py.
+
+  - Clean separation of concerns
+      main.py → routing/orchestration
+      scoring.py → score calculation and report formatting
+      config.py → all configuration in one place
+      apis/* → one file per external service
+
+  - Scalable structure
+      Adding new APIs requires minimal changes (see Section 13).
+
+  - Proper error handling
+      Every API module catches exceptions and returns fallback scores.
+      No single API failure can crash the system.
+
+  - Concurrent execution
+      External API calls run in parallel to minimize total response time.
+
+  - Asynchronous WhatsApp delivery
+      Background threading ensures Twilio webhook timeouts are never hit.
+
+  - Consistent return format
+      All API modules return {"score": int, "source": str}.
+
+  - Configurable weights and thresholds
+      Scoring weights and classification thresholds are defined in
+      config.py and can be adjusted without modifying logic code.
+
+
+================================================================================
+                          END OF DOCUMENTATION
+================================================================================

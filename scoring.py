@@ -78,10 +78,13 @@ def build_report(url: str, results: list[dict]) -> str:
         key=lambda r: SOURCE_WEIGHTS.get(r.get("source", ""), 1),
         reverse=True,
     )
-    sources = "\n".join(
-        f"  - {r['source']}: {r['score']}%"
-        for r in sorted_results
-    )
+    def _format_source_line(r: dict) -> str:
+        line = f"  - {r['source']}: {r['score']}%"
+        if r.get("source") == "Google Safe Browsing" and r.get("score") == 0:
+            line += "  ⛔ UNSAFE – threat detected by Google"
+        return line
+
+    sources = "\n".join(_format_source_line(r) for r in sorted_results)
 
     # ── Heuristic flags section (only when flags were raised) ─────────────────
     heuristic_section = ""

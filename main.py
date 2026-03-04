@@ -11,10 +11,12 @@ Responsibilities
 """
 
 import re
+import threading
 import concurrent.futures
 
 from flask import Flask, request, Response, render_template, jsonify
 from twilio.twiml.messaging_response import MessagingResponse  # type: ignore[import-untyped]
+from twilio.rest import Client as TwilioClient                 # type: ignore[import-untyped]
 
 # ── API modules ────────────────────────────────────────────────────────────────
 from apis.virustotal           import check as vt_check
@@ -25,8 +27,12 @@ from apis.checkphish           import check as cp_check
 
 # ── Internal modules ───────────────────────────────────────────────────────────
 from scoring import build_report
+from config import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_NUMBER
 
 app = Flask(__name__)
+
+# ── Twilio REST client (used to send replies asynchronously) ───────────────────
+twilio_client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 URL_REGEX = re.compile(
@@ -107,32 +113,49 @@ def check():
 
 
 # ── Webhook ────────────────────────────────────────────────────────────────────
+
+def _process_and_reply(url: str, sender: str) -> None:
+    """Run all checks in a background thread and send the result via Twilio REST API."""
+    results = run_all_checks(url)
+
+    if not results:
+        body = "❌ All safety checks failed. Please try again later."
+    else:
+        body = build_report(url, results)
+
+    try:
+        twilio_client.messages.create(
+            body=body,
+            from_=TWILIO_WHATSAPP_NUMBER,
+            to=sender,
+        )
+    except Exception as exc:
+        print(f"[ERROR] Failed to send WhatsApp reply: {exc}")
+
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
     incoming_msg = request.form.get("Body", "").strip()
     sender       = request.form.get("From", "")
 
     resp = MessagingResponse()
-    msg  = resp.message()
 
     url = extract_url(incoming_msg)
     if not url:
+        # No URL found – reply inline (instant, no API calls needed)
+        msg = resp.message()
         msg.body(
             "⚠️ I couldn't find a URL in your message.\n"
             "Please send a link starting with http:// or https://"
         )
         return Response(str(resp), mimetype="application/xml")
 
-    results = run_all_checks(url)
+    # Acknowledge immediately so Twilio doesn't time out,
+    # then run the heavy API checks in a background thread.
+    thread = threading.Thread(target=_process_and_reply, args=(url, sender))
+    thread.start()
 
-    if not results:
-        msg.body(
-            "❌ All safety checks failed. Please try again later."
-        )
-        return Response(str(resp), mimetype="application/xml")
-
-    report = build_report(url, results)
-    msg.body(report)
+    # Return empty TwiML so Twilio gets a 200 within its timeout window
     return Response(str(resp), mimetype="application/xml")
 
 
